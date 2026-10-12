@@ -126,12 +126,90 @@ Generate an e-commerce and SEO package structured in Markdown:
                 )
             elif not st.session_state.get("_error_shown"):
                 st.error("All models are currently experiencing high demand. Please retry in 30 seconds.")
-                
-            st.markdown(
-                """
-                <div style="text-align: center; color: gray; font-size: 0.85rem; margin-top: 50px;">
-                Gemini is an AI and can make mistakes. Please verify important information before using.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+
+st.markdown(
+    """
+    <style>
+    .footer-container {
+        margin-top: 60px;
+        padding: 30px 20px 20px 20px;
+        border-radius: 18px;
+        background: linear-gradient(145deg, rgba(17, 24, 39, 0.95), rgba(15, 23, 42, 0.98));
+        border: 1px solid rgba(99, 102, 241, 0.3);
+        box-shadow: 0 10px 30px -10px rgba(79, 70, 229, 0.25);
+        color: #e2e8f0;
+        text-align: center;
+        font-family: inherit;
+    }
+    .footer-badge {
+        display: inline-block;
+        padding: 4px 14px;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        background: linear-gradient(90deg, #6366f1, #a855f7);
+        color: #ffffff;
+        margin-bottom: 12px;
+        box-shadow: 0 0 12px rgba(168, 85, 247, 0.4);
+    }
+    .footer-title {
+        font-size: 1.15rem;
+        font-weight: 600;
+        margin: 0 0 6px 0;
+        color: #f8fafc;
+    }
+    .footer-sub {
+        font-size: 0.88rem;
+        color: #94a3b8;
+        margin-bottom: 18px;
+    }
+    .members-grid {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+    .member-pill {
+        background: rgba(30, 41, 59, 0.85);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        padding: 6px 16px;
+        border-radius: 12px;
+        font-size: 0.85rem;
+        color: #f1f5f9;
+        font-weight: 500;
+        transition: all 0.2s ease-in-out;
+    }
+    .member-pill:hover {
+        border-color: #818cf8;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+    }
+    .footer-disclaimer {
+        font-size: 0.78rem;
+        color: #64748b;
+        border-top: 1px solid rgba(148, 163, 184, 0.15);
+        padding-top: 14px;
+        margin-top: 8px;
+    }
+    </style>
+
+    <div class="footer-container">
+        <span class="footer-badge">Solo Leveling</span>
+        <div class="footer-title">Crafted with ❤️ by Team Solo Leveling</div>
+        <div class="footer-sub">Generative AI Project &bull; M.Sc. AI (Part 1)</div>
+        <div class="members-grid">
+            <div class="member-pill">⚡ Hadi Sheikh</div>
+            <div class="member-pill">⚡ Rushikesh</div>
+            <div class="member-pill">⚡ Sujal Singh</div>
+            <div class="member-pill">⚡ Farhan</div>
+        </div>
+        <div class="footer-disclaimer">
+            ⚠️ Gemini is an AI and can make mistakes. Please verify critical details and SEO output before publishing.
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
