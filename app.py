@@ -13,17 +13,6 @@ st.set_page_config(
     layout="wide"
 )
 
-st.markdown(
-    """
-    <style>
-    .stApp {
-        background-color: #f8fafc; /* Change to any hex color code, e.g. #0e1117 for dark mode */
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
 # Fetch key from environment or Streamlit secrets
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
