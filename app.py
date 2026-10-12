@@ -197,8 +197,8 @@ st.markdown(
     </style>
 
     <div class="footer-container">
-        <span class="footer-badge">Solo Leveling</span>
-        <div class="footer-title">Crafted with ❤️ by Team Solo Leveling</div>
+        <span class="footer-badge">AI Product SEO Generator</span>
+        <div class="footer-title">Made with ❤️ by<br>Team Solo Leveling</div>
         <div class="footer-sub">Generative AI Project &bull; M.Sc. AI (Part 1)</div>
         <div class="members-grid">
             <div class="member-pill">⚡ Hadi Sheikh</div>
