@@ -126,3 +126,12 @@ Generate an e-commerce and SEO package structured in Markdown:
                 )
             elif not st.session_state.get("_error_shown"):
                 st.error("All models are currently experiencing high demand. Please retry in 30 seconds.")
+                
+            st.markdown(
+                """
+                <div style="text-align: center; color: gray; font-size: 0.85rem; margin-top: 50px;">
+                Gemini is an AI and can make mistakes. Please verify important information before using.
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
