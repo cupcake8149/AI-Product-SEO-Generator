@@ -4,7 +4,8 @@ from io import BytesIO
 import streamlit as st
 from dotenv import load_dotenv
 from PIL import Image, ImageOps
-from google import genai, types
+from google import genai
+from google.genai import types
 from google.genai.errors import APIError
 
 load_dotenv()
