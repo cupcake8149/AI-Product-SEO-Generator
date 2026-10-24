@@ -2,7 +2,7 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 from PIL import Image
-from google import genai
+from google import genai, types
 from google.genai.errors import APIError
 
 load_dotenv()
@@ -34,15 +34,32 @@ col1, col2 = st.columns([1, 1], gap="large")
 
 with col1:
     st.subheader("Product Input")
-    uploaded_file = st.file_uploader(
-        "Upload Product Image", 
-        type=["png", "jpg", "jpeg", "webp"]
+    uploaded_files = st.file_uploader(
+        "Upload Product Images",
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        help="Upload one or more product images."
     )
 
-    pil_image = None
-    if uploaded_file:
-        pil_image = Image.open(uploaded_file)
-        st.image(pil_image, caption="Product Preview", use_container_width=True)
+    pil_images = []
+    if uploaded_files:
+        for uploaded_file in uploaded_files:
+            try:
+                pil_image = Image.open(uploaded_file)
+                if pil_image.mode in ("RGBA", "P"):
+                    pil_image = pil_image.convert("RGB")
+                elif pil_image.mode != "RGB":
+                    pil_image = pil_image.convert("RGB")
+                pil_images.append(pil_image)
+            except Exception as e:
+                st.warning(f"Could not read {uploaded_file.name}: {e}")
+
+        if pil_images:
+            st.image(
+                pil_images,
+                caption=[f"Product Image {i + 1}" for i in range(len(pil_images))],
+                use_container_width=True
+            )
 
     product_name = st.text_input("Product Name (Optional)")
     features = st.text_area("Key Features / Notes (Optional)")
@@ -55,31 +72,62 @@ with col1:
 with col2:
     st.subheader("Generated Assets")
     if generate_btn:
-        if not pil_image and not product_name.strip() and not features.strip():
-            st.warning("Please upload a product image or provide product details.")
+        if not pil_images and not product_name.strip() and not features.strip():
+            st.warning("Please upload at least one product image or provide product details.")
         else:
             prompt = f"""
-You are an expert e-commerce copywriter and SEO strategist.
-Analyze the product provided.
+You are an expert e-commerce copywriter, SEO strategist, objective market analyst,
+and strict but fair product critic. Analyze the product using the supplied images
+and user context. Do not claim visual details or specifications that cannot be
+reasonably established from the inputs.
 
 User Context:
-- Product Name: {product_name.strip() if product_name.strip() else 'Infer from visual details'}
-- Features / Notes: {features.strip() if features.strip() else 'Extract from visual appearance'}
+- Product Name: {product_name.strip() if product_name.strip() else 'Infer from visual details; state uncertainty if needed'}
+- Features / Notes: {features.strip() if features.strip() else 'Extract only supportable details from the images'}
 - Tone: {tone}
+- Number of supplied images: {len(pil_images)}
 
-Generate an e-commerce and SEO package structured in Markdown:
-### 1. SEO-Optimized Title (Under 60 chars)
+Generate an e-commerce and research package structured in Markdown:
+
+### 1. SEO-Optimized Title (under 60 characters)
 ### 2. Short Description (1-2 sentences)
 ### 3. Key Feature Bullets (4-5 bullets)
-### 4. SEO Keywords (5 Primary, 5 Long-tail)
-### 5. Meta Description (150-160 chars with CTA)
+### 4. SEO Keywords (5 primary and 5 long-tail)
+### 5. Meta Description (150-160 characters, with a CTA)
 ### 6. Recommended Image Alt Text
+### 7. AI Verdict & Buying Advice
+- Give an honest, balanced assessment of whether this product appears worth buying.
+- Explain who may benefit from it and who should avoid it.
+- Separate facts supported by the input from assumptions or information that needs checking.
+- Do not make unsupported claims about performance, safety, durability, or quality.
+
+### 8. Competitor Comparison Table (2-4 alternatives, when appropriate)
+- If the user entered a broad category (for example, "wireless earphones"), compare 2-4 relevant, popular alternatives.
+- Use a Markdown table with: Product Name, Estimated Price Range, Key Pros, Key Cons, and Value-for-Money Verdict.
+- If a specific product is named, compare it with 2-4 relevant alternatives when enough reliable information is available.
+- Prices and product availability vary by country and date. State the market/region and that prices are estimates; do not invent precise current prices.
+- Use web search to verify current product names, pricing context, and comparisons. Cite source URLs where available.
+- If reliable information cannot be found, clearly say so rather than making up facts.
+
+### 9. Customer Reviews & Testimonials (3-5 real reviews, if verifiable)
+- Use web search to look for genuine customer reviews on identifiable platforms, such as retailer listings or official brand stores.
+- Include 3-5 reviews only when the review text, rating, and source page can be verified.
+- For each, provide a short excerpt or faithful paraphrase, the displayed rating (if available), the platform, and a direct source URL.
+- Do NOT invent, simulate, or present AI-written text as a real customer testimonial.
+- Do not imply a review is from a platform unless the source page supports that attribution.
+- If no verifiable reviews are found, explicitly write: "No verifiable customer reviews were retrieved in this run." Do not fill the section with fabricated examples.
+- Keep any quoted review excerpts brief and respect source/platform terms.
+
+Important: Web search availability does not guarantee that every review page is accessible. Clearly distinguish retrieved evidence from your own analysis. Do not present generated marketing copy as a customer quote.
 """
             contents = [prompt]
-            if pil_image:
-                if pil_image.mode in ("RGBA", "P"):
-                    pil_image = pil_image.convert("RGB")
-                contents.append(pil_image)
+            contents.extend(pil_images)
+
+            # Google Search grounding is enabled to help retrieve current market information
+            # and verifiable review sources. The prompt forbids inventing customer testimonials.
+            research_config = types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())]
+            )
 
             # Models tried in order of priority; if one gives 503, the next is tried automatically
             candidate_models = [
@@ -92,16 +140,40 @@ Generate an e-commerce and SEO package structured in Markdown:
             response_text = None
             successful_model = None
 
-            with st.spinner("Analyzing product and creating SEO package..."):
+            with st.spinner("Analyzing images, researching alternatives and review sources, and creating the SEO package..."):
                 for model_name in candidate_models:
                     try:
                         response = client.models.generate_content(
                             model=model_name,
-                            contents=contents
+                            contents=contents,
+                            config=research_config
                         )
                         if response.text:
                             response_text = response.text
                             successful_model = model_name
+
+                            # Add URLs from Gemini's grounding metadata so users can
+                            # inspect the web sources used for market/review research.
+                            grounding_sources = []
+                            try:
+                                candidates = getattr(response, "candidates", None) or []
+                                metadata = getattr(candidates[0], "grounding_metadata", None) if candidates else None
+                                chunks = getattr(metadata, "grounding_chunks", None) or []
+                                for chunk in chunks:
+                                    web_source = getattr(chunk, "web", None)
+                                    uri = getattr(web_source, "uri", None) if web_source else None
+                                    title = getattr(web_source, "title", None) if web_source else None
+                                    if uri and uri not in [item[1] for item in grounding_sources]:
+                                        grounding_sources.append((title or uri, uri))
+                            except Exception:
+                                # Keep the generated package usable if metadata shape differs by SDK version.
+                                grounding_sources = []
+
+                            if grounding_sources:
+                                response_text += "\n\n### Web Research Sources\n"
+                                response_text += "\n".join(
+                                    f"- [{title}]({uri})" for title, uri in grounding_sources
+                                )
                             break
                     except APIError as e:
                         if e.code == 503:
@@ -125,7 +197,7 @@ Generate an e-commerce and SEO package structured in Markdown:
                     use_container_width=True
                 )
             elif not st.session_state.get("_error_shown"):
-                st.error("All models are currently experiencing high demand. Please retry in 30 seconds.")
+                st.error("The request could not be completed. This may be temporary, or the selected model may not support Google Search grounding. Check the API error above or try again shortly.")
 
 st.markdown(
     """
