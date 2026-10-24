@@ -1,3 +1,195 @@
+import os
+from io import BytesIO
+
+import streamlit as st
+from dotenv import load_dotenv
+from PIL import Image, ImageOps
+from google import genai
+from google.genai import types
+from google.genai.errors import APIError
+
+load_dotenv()
+
+st.set_page_config(
+    page_title="AI Product Description & SEO Generator",
+    page_icon="🛍️",
+    layout="wide",
+)
+
+st.title("🛍️ AI Product Description & SEO Generator")
+st.write(
+    "Create product copy, SEO assets, buying advice, competitor comparisons, "
+    "and web-grounded customer-review research."
+)
+
+# Read credentials from local .env or Streamlit Community Cloud secrets.
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY")
+    except Exception:
+        api_key = None
+
+if not api_key:
+    st.error(
+        "Missing Gemini API key. Add GEMINI_API_KEY to your local .env file "
+        "or to Streamlit Cloud → Manage app → Settings → Secrets."
+    )
+    st.stop()
+
+model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+client = genai.Client(api_key=api_key)
+
+left, right = st.columns([1, 1], gap="large")
+
+with left:
+    st.subheader("Product Information")
+
+    uploaded_files = st.file_uploader(
+        "Upload Product Images (optional; select multiple)",
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        help="Upload several views of the same product for better visual context.",
+    )
+
+    if uploaded_files:
+        preview_cols = st.columns(min(3, len(uploaded_files)))
+        for index, uploaded_file in enumerate(uploaded_files):
+            try:
+                with Image.open(uploaded_file) as source_image:
+                    preview_image = ImageOps.exif_transpose(source_image).copy()
+                with preview_cols[index % len(preview_cols)]:
+                    st.image(
+                        preview_image,
+                        caption=uploaded_file.name,
+                        use_container_width=True,
+                    )
+            except Exception:
+                st.warning(f"Could not preview {uploaded_file.name}. Please use a valid image.")
+
+    product_name = st.text_input(
+        "Product Name or Category",
+        placeholder="e.g., Lumière Silk Face Cleanser or wireless earphones",
+        help="Enter a specific product for its SEO package, or a broad category to compare alternatives.",
+    )
+    features = st.text_area(
+        "Product Features / Notes (optional)",
+        placeholder="Ingredients, specifications, materials, benefits, price, or other known details",
+        height=130,
+    )
+    seo_keywords = st.text_input(
+        "SEO Keywords (optional)",
+        placeholder="e.g., wireless earbuds, Bluetooth earphones",
+    )
+    market = st.text_input(
+        "Target Market / Country (optional)",
+        placeholder="e.g., India, United Kingdom, United States",
+        help="Used to make competitor availability and estimated price comparisons more relevant.",
+    )
+    tone = st.selectbox(
+        "Tone of Voice",
+        [
+            "Persuasive & Commercial",
+            "Trendy & Casual",
+            "Minimalist & Luxury",
+            "Technical & Informative",
+        ],
+    )
+
+    generate_btn = st.button(
+        "Generate Product Research & SEO",
+        type="primary",
+        use_container_width=True,
+    )
+
+with right:
+    st.subheader("Generated Assets")
+
+    if generate_btn:
+        if not product_name.strip() and not features.strip() and not uploaded_files:
+            st.warning("Enter a product name/category, add product notes, or upload at least one image.")
+            st.stop()
+
+        prompt = f"""
+You are an evidence-conscious e-commerce copywriter, product critic, SEO strategist,
+and objective market researcher. Analyze the user's product information and any
+attached images. Use web search to research current, externally verifiable information
+where appropriate.
+
+USER CONTEXT
+- Product name/category: {product_name.strip() or "Infer cautiously from the supplied images and notes"}
+- Features/notes supplied by the user: {features.strip() or "No written features supplied; do not invent specifications"}
+- SEO keywords: {seo_keywords.strip() or "Choose relevant keywords"}
+- Target market: {market.strip() or "Not specified; state the market assumption used for prices"}
+- Tone: {tone}
+
+IMPORTANT EVIDENCE RULES
+- Distinguish user-provided facts, visual observations, estimates, and externally verified claims.
+- Never invent ingredients, certifications, specifications, prices, ratings, review quotations,
+  customer identities, review dates, or source URLs.
+- Product images alone do not prove ingredients, performance, safety, certifications, or exact model.
+- Use web search for current competitor information and customer review research.
+- If a fact, review, price, or source cannot be verified, say so clearly rather than guessing.
+- Do not imply that a review is real unless it can be tied to an accessible source page.
+- Review snippets, if used, must be brief and faithful to the source; do not fabricate or combine
+  different reviews. Prefer paraphrases with direct links over invented quotation marks.
+- Clearly label estimated prices and include currency and market.
+- If the input names a specific product, focus the SEO package on that product. If the input is
+  a broad category (for example, "wireless earphones"), also compare 2–4 relevant alternatives.
+- Do not treat a broad category as if it were one specific product.
+
+Write the output in clear Markdown with these sections:
+
+### 1. SEO-Optimized Product Title
+Keep the title under 60 characters where practical.
+
+### 2. Short Product Description
+Write 1–2 persuasive sentences without unsupported claims.
+
+### 3. Key Feature Bullets
+Provide 4–5 bullets. Mark uncertain features as unverified or omit them.
+
+### 4. SEO Keywords
+List 5 primary and 5 long-tail keywords. Use supplied keywords naturally where relevant.
+
+### 5. Meta Description
+Aim for 150–160 characters with a call to action, without keyword stuffing.
+
+### 6. Recommended Image Alt Text
+Describe only visible details. Do not infer invisible specifications.
+
+### 7. Customer Reviews & Testimonials — 3–5 sourced reviews
+Research 3–5 real customer reviews for the exact product where possible. For each one include:
+- A short faithful quote (only if the exact wording is visible and verifiable) or a clearly labelled paraphrase
+- Rating, reviewer/date only if visible on the source
+- Source platform and a direct URL to the actual review/product-review page
+- A brief note if the source is for a different region or a closely related model
+
+Do not create sample reviews and present them as real. If fewer than 3 genuine, traceable reviews can be found, report how many were verified and explain what could not be found. Official product pages and general search results are not themselves customer reviews unless they display actual customer feedback. Clearly distinguish sponsored/brand-provided testimonials from independent customer reviews.
+
+### 8. AI Buying Verdict & Advice
+Give a balanced verdict based on available evidence: whether it appears worth considering, who may benefit, who should avoid it, key drawbacks, and what to check before buying. Do not state certainty beyond the evidence.
+
+### 9. Competitor Comparison (2–4 alternatives when appropriate)
+If the user entered a broad product category, use web research to compare 2–4 relevant, currently available market alternatives. Use a Markdown table with:
+- Product/model
+- Estimated price range (currency, market, and source/date where available)
+- Key pros
+- Key cons
+- Value-for-money verdict
+- Source link(s)
+
+For a specific named product, include alternatives only when useful and clearly identify them as alternatives. Do not invent exact prices. If current prices cannot be verified, label them unavailable instead of guessing.
+
+### 10. Research Sources
+List the most relevant URLs actually used. Prioritize direct product-review pages and reliable retailer/manufacturer pages. Explain briefly which claims each source supports.
+
+Remember: a search result snippet alone may not establish that a claim is true. If web research does not return adequate evidence, be transparent about the limitation.
+"""
+
+        contents = [prompt]
+        image_count = 0
+        for uploaded_file in uploaded_files or []:
             try:
                 uploaded_file.seek(0)
                 with Image.open(uploaded_file) as source_image:
