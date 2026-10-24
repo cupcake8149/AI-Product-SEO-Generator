@@ -1,51 +1,59 @@
 # AI Product Description & SEO Generator
 
-A Streamlit web app that uses the Google Gemini API to create product descriptions and SEO content from product details and/or an image.
+A Streamlit application using Google's Gemini API to create SEO copy and research products.
 
-## Files
-- `app.py` — Streamlit application
-- `requirements.txt` — Python dependencies
-- `.gitignore` — excludes local secrets and generated files
-- `.env` — local API key placeholder (never commit this file)
+## Features
 
-## Run locally (Windows PowerShell)
+- Upload multiple product images.
+- Generate SEO titles, descriptions, feature bullets, keywords, meta descriptions, and alt text.
+- Request a balanced buying verdict.
+- Research competitor alternatives and estimated prices.
+- Request 3–5 customer reviews with traceable source pages.
+- Use Google Search grounding and display source links returned by Gemini.
+- Download the generated report as Markdown.
 
-1. Install Python if it is not already installed.
-2. Open PowerShell in this project folder.
-3. Create and activate a virtual environment:
+## Important limitation
 
-   ```powershell
-   python -m venv venv
-   .\venv\Scripts\Activate.ps1
-   ```
+Search grounding does not guarantee that 3–5 genuine customer reviews will be found for every product. The prompt instructs the model not to invent reviews. Always open the original review pages and verify quotations, ratings, dates, prices, and model/region before presenting or publishing the results. Grounding links may support general claims without linking to the exact review itself.
 
+## Setup locally
+
+1. Install Python 3.10 or newer.
+2. Open a terminal in this project folder.
+3. Create and activate a virtual environment if desired.
 4. Install dependencies:
 
-   ```powershell
-   pip install -r requirements.txt
+   ```bash
+   python -m pip install -r requirements.txt
    ```
 
-5. Open `.env` and replace `paste_your_actual_api_key_here` with your Gemini API key.
-6. Start the app:
+5. Copy `.env.example` to `.env` and set `GEMINI_API_KEY` to your own key.
+6. Run:
 
-   ```powershell
+   ```bash
    streamlit run app.py
    ```
 
-7. Open the local URL Streamlit prints (normally http://localhost:8501).
+Get a Gemini API key from Google AI Studio. Never commit `.env` or publish your API key.
 
-## Deploy to Streamlit Community Cloud
+## Deploy on Streamlit Community Cloud
 
-1. Push `app.py`, `requirements.txt`, `.gitignore`, and `README.md` to a GitHub repository.
-2. Do **not** commit `.env`.
-3. Create a Streamlit Community Cloud app using `app.py` as the main file.
-4. In Advanced settings / Secrets, add:
+1. Push this project to a GitHub repository.
+2. Create/select the app in Streamlit Community Cloud and set `app.py` as the entry point.
+3. In app settings, open **Secrets** and add:
 
    ```toml
-   GEMINI_API_KEY = "your_actual_api_key_here"
+   GEMINI_API_KEY = "your_real_api_key"
+   GEMINI_MODEL = "gemini-2.5-flash"
    ```
 
-5. Deploy.
+4. Deploy or reboot the app.
 
-## Important
-Keep your Gemini API key private. The `.env` file in this starter ZIP contains only a placeholder; it is not a working API key.
+If your project does not have access to the configured model or Google Search grounding, check the current model availability and API error in **Manage app → Logs**. You can change `GEMINI_MODEL` to a model available to your API project.
+
+## Project files
+
+- `app.py` — Streamlit application
+- `requirements.txt` — Python dependencies
+- `.env.example` — environment variable template
+- `.gitignore` — excludes secrets and Python cache
