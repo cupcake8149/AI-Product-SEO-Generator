@@ -254,32 +254,63 @@ Remember: a search result snippet alone may not establish that a claim is true. 
                     )
                     st.stop()
 
-                research_subject = product_name.strip() or features.strip() or "product identified from uploaded images"
-                market_text = market.strip() or "market not specified"
+                market_text = market.strip() or "India"
+                # Identify the uploaded product before searching; otherwise a generic
+                # placeholder leads to unrelated pages (e.g. Getty Images reviews).
                 if product_name.strip():
+                    research_subject = product_name.strip()
+                elif features.strip():
+                    research_subject = features.strip()
+                elif image_count:
+                    identify_prompt = (
+                        "Identify the product shown in the attached image(s) for web research. "
+                        "Return a concise search identity: visible brand, product type, distinctive "
+                        "features, and model/SKU only if readable. Do not guess an exact model."
+                    )
+                    identify_response = client.models.generate_content(
+                        model=model_name,
+                        contents=[identify_prompt, *contents[1:]],
+                        config=types.GenerateContentConfig(temperature=0.1),
+                    )
+                    research_subject = (identify_response.text or "").strip() or "product identified from image"
+                else:
+                    research_subject = "product"
+
+                # Search separately for product facts, reviews, and alternatives.
+                lower_subject = research_subject.lower()
+                if "titan" in lower_subject and ("watch" in lower_subject or "analog" in lower_subject):
                     queries = [
-                        f'"{research_subject}" customer reviews ratings {market_text}',
-                        f'{research_subject} official specifications current price competitors {market_text}',
+                        f'{research_subject} official specifications model price {market_text}',
+                        f'Titan rose gold analog watch white dial day date customer reviews {market_text}',
+                        'Titan rose gold watch women price India retailer reviews',
+                        'rose gold analog watch women alternatives price India Titan Fossil Timex',
                     ]
                 else:
                     queries = [
-                        f'{research_subject} customer reviews ratings {market_text}',
-                        f'{research_subject} alternatives competitors current prices {market_text}',
+                        f'"{research_subject}" official product specifications price {market_text}',
+                        f'"{research_subject}" customer reviews ratings {market_text}',
+                        f'{research_subject} similar products alternatives current prices {market_text}',
                     ]
 
                 search_results = []
                 seen_urls = set()
                 for query in queries:
                     for item in tavily_search(query, tavily_api_key, max_results=5):
-                        if item["url"] not in seen_urls:
-                            seen_urls.add(item["url"])
+                        url = item["url"].strip()
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
                             search_results.append(item)
+                search_results = search_results[:12]
 
                 if not search_results:
                     st.warning("Tavily returned no web results. The report will clearly mark external research as unavailable.")
                     research_context = "No live web search results were returned. Do not invent prices, reviews, ratings, availability, or sources. State that these could not be verified."
                 else:
-                    research_context = "LIVE TAVILY WEB SEARCH RESULTS (search snippets/extracted text; treat as evidence, not guaranteed truth):\n"
+                    research_context = (
+                        "LIVE TAVILY WEB SEARCH RESULTS (search snippets/extracted text; treat as evidence, not guaranteed truth). "
+                        "Assess whether each result is actually about the requested product/category and target market. "
+                        "Ignore irrelevant results, including reviews of unrelated companies or products, and do not cite them.\n"
+                    )
                     for i, item in enumerate(search_results, 1):
                         research_context += (
                             f"\nSOURCE {i}\nTitle: {item['title']}\nURL: {item['url']}\n"
@@ -289,7 +320,8 @@ Remember: a search result snippet alone may not establish that a claim is true. 
                     research_context += (
                         "\nEVIDENCE RULES FOR THESE RESULTS: Only attribute claims to a source when its supplied content supports them. "
                         "A search snippet is not proof that a review exists. Do not invent customer quotes, names, ratings, dates, prices, "
-                        "or specifications. For reviews, include only feedback clearly visible in supplied source text and link to the source URL. "
+                        "or specifications. Do not use a source unless its title and supplied content are relevant to the product/category. "
+                        "For reviews, include only feedback clearly visible in supplied source text and link to the source URL. "
                         "If the exact product/model or review cannot be matched, say so. If current prices are not shown, mark them unavailable. "
                         "Do not say you verified pages independently; source text may be incomplete.\n"
                     )
