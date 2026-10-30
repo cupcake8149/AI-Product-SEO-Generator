@@ -1,5 +1,6 @@
 import os
-from io import BytesIO
+import re
+from urllib.parse import urlparse
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -49,7 +50,7 @@ if not tavily_api_key:
         tavily_api_key = None
 
 def tavily_search(query: str, key: str, max_results: int = 5) -> list[dict]:
-    """Run a basic Tavily web search and return only useful source fields."""
+    """Run a Tavily search and preserve only fields needed for evidence review."""
     response = requests.post(
         "https://api.tavily.com/search",
         json={
@@ -70,11 +71,121 @@ def tavily_search(query: str, key: str, max_results: int = 5) -> list[dict]:
             "title": item.get("title", "Untitled source"),
             "url": item.get("url", ""),
             "content": item.get("content", ""),
-            "raw_content": (item.get("raw_content") or "")[:5000],
+            "raw_content": (item.get("raw_content") or "")[:3500],
         }
         for item in payload.get("results", [])
         if item.get("url")
     ]
+
+
+STOPWORDS = {
+    "the", "and", "for", "with", "from", "this", "that", "your", "product",
+    "official", "current", "price", "prices", "market", "country", "model",
+    "specification", "specifications", "features", "best", "top", "buy", "shop",
+    "review", "reviews", "rating", "ratings", "customer", "customers", "user",
+    "users", "similar", "alternative", "alternatives", "available", "women", "woman",
+    "men", "man", "new", "online", "in", "on", "at", "of", "to", "a", "an",
+    "is", "are", "by", "it", "as", "or", "be", "all", "from", "about",
+}
+
+
+def tokens(value: str) -> set[str]:
+    """Normalize words for conservative, explainable relevance scoring."""
+    return {
+        word for word in re.findall(r"[a-z0-9]+", (value or "").lower())
+        if len(word) > 2 and word not in STOPWORDS
+    }
+
+
+def source_relevance(item: dict, subject: str, task: str) -> tuple[int, str]:
+    """Score whether a search result is actually useful for this research task."""
+    title = item.get("title", "")
+    snippet = item.get("content", "")
+    raw = item.get("raw_content", "")
+    url = item.get("url", "")
+    title_tokens = tokens(title)
+    body_tokens = tokens(f"{snippet} {raw[:1800]}")
+    subject_tokens = tokens(subject)
+    host = urlparse(url).netloc.lower().removeprefix("www.")
+
+    # Generic lead-generation/company directories are not reliable product evidence.
+    directory_hosts = ("rocketreach.co", "tracxn.com", "cbinsights.com")
+    if any(host == domain or host.endswith("." + domain) for domain in directory_hosts):
+        return -100, "generic company directory; not product-level evidence"
+
+    # Words from the subject are more useful than generic words like "product" or "price".
+    title_overlap = subject_tokens & title_tokens
+    body_overlap = subject_tokens & body_tokens
+    score = (len(title_overlap) * 3) + min(len(body_overlap), 5)
+
+    # Penalize obviously unrelated results and generic company/directories pages.
+    bad_signals = {
+        "spa", "hair design", "dial tone resource", "recall", "auction", "million wristwatch",
+        "portfolio investments", "company profile", "competitors companies like",
+    }
+    title_lower = title.lower()
+    if any(signal in title_lower for signal in bad_signals):
+        score -= 6
+    # Product-category terms help assess alternatives without requiring the same brand.
+    category_terms = {
+        "watch": {"watch", "watches", "analog", "analogue", "wristwatch", "timepiece"},
+        "cleanser": {"cleanser", "cleansing", "facewash", "face", "bodywash", "skincare"},
+        "earphone": {"earphone", "earphones", "earbud", "earbuds", "headphone", "headphones"},
+        "phone": {"phone", "smartphone", "mobile", "handset"},
+        "laptop": {"laptop", "notebook", "computer"},
+        "shoe": {"shoe", "shoes", "sneaker", "sneakers", "footwear"},
+        "bag": {"bag", "handbag", "backpack", "purse"},
+        "perfume": {"perfume", "fragrance", "eau", "cologne"},
+    }
+    subject_lower = subject.lower()
+    category = next((terms for key, terms in category_terms.items() if key in subject_lower or any(t in subject_tokens for t in terms)), set())
+    category_hits = (title_tokens | body_tokens) & category
+    score += min(len(category_hits), 3) * 2
+
+    if task == "reviews":
+        review_signals = {"review", "reviews", "rating", "ratings", "verified", "customer", "customers", "stars", "testimonial"}
+        if (title_tokens | body_tokens) & review_signals:
+            score += 2
+        else:
+            score -= 2
+    elif task == "alternatives":
+        # Alternatives need clear category relevance, not necessarily a match to the target brand.
+        if category and not category_hits:
+            score -= 5
+
+    # A direct official/retailer/product page can be useful, but authority alone is not relevance.
+    if any(term in host for term in ("titan.co.in", "fossil.com", "citizenwatch.com", "timex.com", "amazon.in", "flipkart.com")):
+        score += 1
+
+    reason = f"title overlap: {len(title_overlap)}, category matches: {len(category_hits)}"
+    return score, reason
+
+
+def filter_relevant_sources(items: list[dict], subject: str, limit: int = 8) -> list[dict]:
+    """Keep a small, ranked set of task-relevant sources; discard noisy search hits."""
+    ranked = []
+    for item in items:
+        task = item.get("task", "product")
+        score, reason = source_relevance(item, subject, task)
+        item["relevance_score"] = score
+        item["relevance_reason"] = reason
+        # Use a slightly lower threshold for alternatives because brand names differ.
+        threshold = 2 if task == "alternatives" else 3
+        if score >= threshold:
+            ranked.append(item)
+    ranked.sort(key=lambda item: (item["relevance_score"], item.get("tavily_score", 0)), reverse=True)
+
+    # Deduplicate by normalized URL and cap the evidence set passed to the language model.
+    kept, seen = [], set()
+    for item in ranked:
+        normalized_url = item["url"].split("#", 1)[0].rstrip("/").lower()
+        if normalized_url in seen:
+            continue
+        seen.add(normalized_url)
+        kept.append(item)
+        if len(kept) >= limit:
+            break
+    return kept
 
 left, right = st.columns([1, 1], gap="large")
 
@@ -175,6 +286,13 @@ IMPORTANT EVIDENCE RULES
 - If the input names a specific product, focus the SEO package on that product. If the input is
   a broad category (for example, "wireless earphones"), also compare 2–4 relevant alternatives.
 - Do not treat a broad category as if it were one specific product.
+- Never infer a gender target, exact model, material, or product variant from appearance alone.
+- Treat each supplied search result as a candidate, not automatically relevant. Ignore sources that
+  merely mention the category or brand without supporting the specific claim being made.
+- For each competitor row, use an exact model and a source that identifies that model. If the results
+  only support broad brand-level comparisons, label them as brand-level examples and do not invent prices.
+- The source list should contain only sources actually cited or materially used in the report; do not
+  repeat every search result just because it was returned.
 
 Write the output in clear Markdown with these sections:
 
@@ -276,54 +394,69 @@ Remember: a search result snippet alone may not establish that a claim is true. 
                 else:
                     research_subject = "product"
 
-                # Search separately for product facts, reviews, and alternatives.
+                # Search in separate stages so each result can be judged against its intended task.
                 lower_subject = research_subject.lower()
                 if "titan" in lower_subject and ("watch" in lower_subject or "analog" in lower_subject):
-                    queries = [
-                        f'{research_subject} official specifications model price {market_text}',
-                        f'Titan rose gold analog watch white dial day date customer reviews {market_text}',
-                        'Titan rose gold watch women price India retailer reviews',
-                        'rose gold analog watch women alternatives price India Titan Fossil Timex',
+                    query_plan = [
+                        ("product", f'"{research_subject}" Titan official product specifications price {market_text}'),
+                        ("reviews", f'"{research_subject}" Titan watch customer reviews ratings {market_text}'),
+                        ("reviews", f'Titan rose gold analog watch white dial day date reviews retailer {market_text}'),
+                        ("alternatives", f'rose gold analog watch white dial day date alternatives price India Fossil Timex'),
                     ]
                 else:
-                    queries = [
-                        f'"{research_subject}" official product specifications price {market_text}',
-                        f'"{research_subject}" customer reviews ratings {market_text}',
-                        f'{research_subject} similar products alternatives current prices {market_text}',
+                    query_plan = [
+                        ("product", f'"{research_subject}" official product specifications price {market_text}'),
+                        ("reviews", f'"{research_subject}" customer reviews ratings retailer {market_text}'),
+                        ("alternatives", f'{research_subject} similar products alternatives current prices {market_text}'),
                     ]
 
-                search_results = []
+                candidate_results = []
                 seen_urls = set()
-                for query in queries:
+                for task, query in query_plan:
                     for item in tavily_search(query, tavily_api_key, max_results=5):
                         url = item["url"].strip()
-                        if url and url not in seen_urls:
-                            seen_urls.add(url)
-                            search_results.append(item)
-                search_results = search_results[:12]
+                        normalized_url = url.split("#", 1)[0].rstrip("/").lower()
+                        if not url or normalized_url in seen_urls:
+                            continue
+                        seen_urls.add(normalized_url)
+                        item["task"] = task
+                        item["query"] = query
+                        candidate_results.append(item)
+
+                search_results = filter_relevant_sources(candidate_results, research_subject, limit=8)
 
                 if not search_results:
-                    st.warning("Tavily returned no web results. The report will clearly mark external research as unavailable.")
-                    research_context = "No live web search results were returned. Do not invent prices, reviews, ratings, availability, or sources. State that these could not be verified."
+                    st.warning(
+                        "Tavily returned results, but none passed the relevance filter. "
+                        "The report will avoid making externally sourced claims rather than use unrelated pages. "
+                        "Try entering the exact product name/model or adding identifying details."
+                    )
+                    research_context = (
+                        "No search result passed the app's relevance filter for this product. "
+                        "Do not invent prices, reviews, ratings, availability, specifications, competitors, or sources. "
+                        "Explain that relevant evidence could not be found in this search."
+                    )
                 else:
                     research_context = (
-                        "LIVE TAVILY WEB SEARCH RESULTS (search snippets/extracted text; treat as evidence, not guaranteed truth). "
-                        "Assess whether each result is actually about the requested product/category and target market. "
-                        "Ignore irrelevant results, including reviews of unrelated companies or products, and do not cite them.\n"
+                        "LIVE TAVILY RESULTS THAT PASSED A LOCAL RELEVANCE FILTER. The filter is heuristic, "
+                        "not proof that a page is accurate. Re-check each title/snippet/extracted text before using it. "
+                        "Ignore a result if it does not directly support the specific claim.\n"
                     )
                     for i, item in enumerate(search_results, 1):
                         research_context += (
-                            f"\nSOURCE {i}\nTitle: {item['title']}\nURL: {item['url']}\n"
+                            f"\nSOURCE {i} (research task: {item['task']}; relevance score: {item['relevance_score']})"
+                            f"\nTitle: {item['title']}\nURL: {item['url']}\n"
                             f"Search snippet: {item['content']}\n"
                             f"Extracted page text (may be incomplete): {item['raw_content'] or '[not available]'}\n"
                         )
                     research_context += (
-                        "\nEVIDENCE RULES FOR THESE RESULTS: Only attribute claims to a source when its supplied content supports them. "
-                        "A search snippet is not proof that a review exists. Do not invent customer quotes, names, ratings, dates, prices, "
-                        "or specifications. Do not use a source unless its title and supplied content are relevant to the product/category. "
-                        "For reviews, include only feedback clearly visible in supplied source text and link to the source URL. "
-                        "If the exact product/model or review cannot be matched, say so. If current prices are not shown, mark them unavailable. "
-                        "Do not say you verified pages independently; source text may be incomplete.\n"
+                        "\nEVIDENCE RULES: A result passing a relevance filter is not proof that its claims are true. "
+                        "Only attribute claims to a source when its supplied text supports them. Do not invent customer quotes, "
+                        "names, ratings, dates, prices, or specifications. For reviews, use only feedback clearly visible "
+                        "in supplied source text and link to the actual review/product-review page. Official product pages "
+                        "and general search results are not customer reviews unless actual feedback is visible. If the exact "
+                        "product/model or review cannot be matched, say so. If current prices are not shown, mark them unavailable. "
+                        "Do not claim pages were independently verified; extracted source text may be incomplete.\n"
                     )
 
                 grounded_contents = [contents[0], "\n\n" + research_context, *contents[1:]]
@@ -342,10 +475,15 @@ Remember: a search result snippet alone may not establish that a claim is true. 
             st.markdown(response_text)
 
             if search_results:
-                with st.expander(f"Live web sources returned by Tavily ({len(search_results)})", expanded=True):
+                with st.expander(f"Relevant candidate sources used for research ({len(search_results)})", expanded=True):
                     for item in search_results:
                         title = item["title"].replace("[", "(").replace("]", ")")
-                        st.markdown(f"- [{title}]({item['url']})")
+                        task_label = item.get("task", "product").title()
+                        st.markdown(f"- **{task_label}** · [{title}]({item['url']})")
+                    st.caption(
+                        "These sources passed a basic relevance filter, not a fact-check. "
+                        "Open the pages before relying on specific prices, ratings, or product claims."
+                    )
             else:
                 st.info("No live source links were returned. External claims, prices, and reviews are not verified in this report.")
 

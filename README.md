@@ -6,7 +6,9 @@ Streamlit app using Gemini for image analysis and SEO writing, and Tavily for li
 - Upload multiple product images.
 - Generate SEO titles, descriptions, feature bullets, keywords, meta descriptions, and alt text.
 - Produce buying advice and competitor research using live search results.
-- Search for customer-review sources and link the sources returned by Tavily.
+- Search separately for product details, customer reviews, and alternatives.
+- Rank and filter candidate search results for product/category relevance before passing them to Gemini.
+- Exclude generic company-directory pages from product-level evidence and show only the filtered source set.
 - Avoids using Gemini Google Search grounding, which was returning quota errors for this project.
 - Download the generated report as Markdown.
 
