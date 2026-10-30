@@ -4,6 +4,7 @@ from io import BytesIO
 import streamlit as st
 from dotenv import load_dotenv
 from PIL import Image, ImageOps
+import requests
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
@@ -39,6 +40,41 @@ if not api_key:
 
 model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 client = genai.Client(api_key=api_key)
+
+tavily_api_key = os.getenv("TAVILY_API_KEY")
+if not tavily_api_key:
+    try:
+        tavily_api_key = st.secrets.get("TAVILY_API_KEY")
+    except Exception:
+        tavily_api_key = None
+
+def tavily_search(query: str, key: str, max_results: int = 5) -> list[dict]:
+    """Run a basic Tavily web search and return only useful source fields."""
+    response = requests.post(
+        "https://api.tavily.com/search",
+        json={
+            "api_key": key,
+            "query": query,
+            "search_depth": "basic",
+            "topic": "general",
+            "max_results": max_results,
+            "include_answer": False,
+            "include_raw_content": True,
+        },
+        timeout=25,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return [
+        {
+            "title": item.get("title", "Untitled source"),
+            "url": item.get("url", ""),
+            "content": item.get("content", ""),
+            "raw_content": (item.get("raw_content") or "")[:5000],
+        }
+        for item in payload.get("results", [])
+        if item.get("url")
+    ]
 
 left, right = st.columns([1, 1], gap="large")
 
@@ -113,8 +149,9 @@ with right:
         prompt = f"""
 You are an evidence-conscious e-commerce copywriter, product critic, SEO strategist,
 and objective market researcher. Analyze the user's product information and any
-attached images. Use web search to research current, externally verifiable information
-where appropriate.
+attached images. Use the LIVE WEB SEARCH RESULTS supplied later in this prompt to research current,
+externally verifiable information. Do not claim to have visited or verified a page beyond
+what its supplied title, snippet, and extracted text support.
 
 USER CONTEXT
 - Product name/category: {product_name.strip() or "Infer cautiously from the supplied images and notes"}
@@ -128,7 +165,8 @@ IMPORTANT EVIDENCE RULES
 - Never invent ingredients, certifications, specifications, prices, ratings, review quotations,
   customer identities, review dates, or source URLs.
 - Product images alone do not prove ingredients, performance, safety, certifications, or exact model.
-- Use web search for current competitor information and customer review research.
+- Use only the live search results supplied in this prompt for external research.
+- Cite only URLs included in those results. Never invent a URL or claim a source supports something it does not.
 - If a fact, review, price, or source cannot be verified, say so clearly rather than guessing.
 - Do not imply that a review is real unless it can be tied to an accessible source page.
 - Review snippets, if used, must be brief and faithful to the source; do not fabricate or combine
@@ -208,89 +246,76 @@ Remember: a search result snippet alone may not establish that a claim is true. 
             st.stop()
 
         try:
-            research_fallback = False
-            with st.spinner(
-                "Researching the product, checking available web sources, and generating your SEO package..."
-            ):
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            temperature=0.4,
-                            tools=[types.Tool(google_search=types.GoogleSearch())],
-                        ),
+            with st.spinner("Searching the live web with Tavily, then generating your SEO and research package..."):
+                if not tavily_api_key:
+                    st.error(
+                        "Tavily API key is missing. Add TAVILY_API_KEY to Streamlit Cloud → "
+                        "Manage app → Settings → Secrets, then reboot the app."
                     )
-                except APIError as grounded_exc:
-                    # If the Search-grounded request is quota-blocked, make one
-                    # plain generation attempt so the basic SEO draft can still work.
-                    if getattr(grounded_exc, "code", None) != 429:
-                        raise
-                    # Explicitly override the research sections for the no-search fallback.
-                    # Without this instruction, the model may invent competitor prices or
-                    # imply that official pages were checked even though Search was unavailable.
-                    fallback_rules = """
-IMPORTANT: LIVE WEB RESEARCH IS UNAVAILABLE IN THIS RUN.
-Do not claim or imply that you searched the web, checked official sites, or verified any source.
-Do not provide competitor price estimates, ratings, availability claims, review quotes, or source URLs
-from memory. In section 7, state that no customer reviews could be verified in this run. In section 9,
-state that competitor comparison is unavailable without live research and ask the user to verify
-current alternatives and prices independently. In section 10, state that no external web sources were
-consulted. You may still analyze visible image details and write general SEO copy, but label uncertain
-product specifications as unverified. These instructions override any earlier request to research
-competitors, prices, reviews, or sources.
-"""
-                    fallback_contents = [contents[0], fallback_rules, *contents[1:]]
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=fallback_contents,
-                        config=types.GenerateContentConfig(temperature=0.4),
-                    )
-                    research_fallback = True
+                    st.stop()
 
-            if research_fallback:
-                st.warning(
-                    "Google Search grounding was quota-blocked, so this report was generated "
-                    "without live web research. Competitor prices and customer reviews are "
-                    "not verified in this run; do not treat them as sourced facts."
+                research_subject = product_name.strip() or features.strip() or "product identified from uploaded images"
+                market_text = market.strip() or "market not specified"
+                if product_name.strip():
+                    queries = [
+                        f'"{research_subject}" customer reviews ratings {market_text}',
+                        f'{research_subject} official specifications current price competitors {market_text}',
+                    ]
+                else:
+                    queries = [
+                        f'{research_subject} customer reviews ratings {market_text}',
+                        f'{research_subject} alternatives competitors current prices {market_text}',
+                    ]
+
+                search_results = []
+                seen_urls = set()
+                for query in queries:
+                    for item in tavily_search(query, tavily_api_key, max_results=5):
+                        if item["url"] not in seen_urls:
+                            seen_urls.add(item["url"])
+                            search_results.append(item)
+
+                if not search_results:
+                    st.warning("Tavily returned no web results. The report will clearly mark external research as unavailable.")
+                    research_context = "No live web search results were returned. Do not invent prices, reviews, ratings, availability, or sources. State that these could not be verified."
+                else:
+                    research_context = "LIVE TAVILY WEB SEARCH RESULTS (search snippets/extracted text; treat as evidence, not guaranteed truth):\n"
+                    for i, item in enumerate(search_results, 1):
+                        research_context += (
+                            f"\nSOURCE {i}\nTitle: {item['title']}\nURL: {item['url']}\n"
+                            f"Search snippet: {item['content']}\n"
+                            f"Extracted page text (may be incomplete): {item['raw_content'] or '[not available]'}\n"
+                        )
+                    research_context += (
+                        "\nEVIDENCE RULES FOR THESE RESULTS: Only attribute claims to a source when its supplied content supports them. "
+                        "A search snippet is not proof that a review exists. Do not invent customer quotes, names, ratings, dates, prices, "
+                        "or specifications. For reviews, include only feedback clearly visible in supplied source text and link to the source URL. "
+                        "If the exact product/model or review cannot be matched, say so. If current prices are not shown, mark them unavailable. "
+                        "Do not say you verified pages independently; source text may be incomplete.\n"
+                    )
+
+                grounded_contents = [contents[0], "\n\n" + research_context, *contents[1:]]
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=grounded_contents,
+                    config=types.GenerateContentConfig(temperature=0.3),
                 )
 
             response_text = response.text or ""
             if not response_text.strip():
-                st.error(
-                    "Gemini returned no text. Please retry, or check the app logs and model availability."
-                )
+                st.error("Gemini returned no text. Please retry, or check the app logs and model availability.")
                 st.stop()
 
-            st.caption(f"Generated using `{model_name}` · Images analyzed: {image_count}")
+            st.caption(f"Generated using `{model_name}` · Images analyzed: {image_count} · Live search: Tavily")
             st.markdown(response_text)
 
-            # Show source links supplied by Gemini's Google Search grounding metadata.
-            source_items = []
-            seen_urls = set()
-            try:
-                for candidate in response.candidates or []:
-                    grounding_metadata = getattr(candidate, "grounding_metadata", None)
-                    for chunk in getattr(grounding_metadata, "grounding_chunks", None) or []:
-                        web_source = getattr(chunk, "web", None)
-                        uri = getattr(web_source, "uri", None) if web_source else None
-                        title = getattr(web_source, "title", None) if web_source else None
-                        if uri and uri not in seen_urls:
-                            seen_urls.add(uri)
-                            source_items.append((title or uri, uri))
-            except Exception:
-                # Grounding metadata may be absent for some responses.
-                source_items = []
-
-            if source_items:
-                with st.expander(f"Web sources returned by Gemini ({len(source_items)})", expanded=True):
-                    for title, uri in source_items:
-                        st.markdown(f"- [{title}]({uri})")
+            if search_results:
+                with st.expander(f"Live web sources returned by Tavily ({len(search_results)})", expanded=True):
+                    for item in search_results:
+                        title = item["title"].replace("[", "(").replace("]", ")")
+                        st.markdown(f"- [{title}]({item['url']})")
             else:
-                st.info(
-                    "No web-source links were returned in grounding metadata for this response. "
-                    "Do not treat any purported customer reviews as verified until their original pages are checked."
-                )
+                st.info("No live source links were returned. External claims, prices, and reviews are not verified in this report.")
 
             st.download_button(
                 label="Download SEO & Research Package (.md)",
@@ -326,6 +351,19 @@ competitors, prices, reviews, or sources.
             if error_detail:
                 st.caption(f"Gemini's error detail: {error_detail[:1200]}")
             st.caption("For technical details, open Manage app → Logs in Streamlit Cloud.")
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            detail = ""
+            try:
+                detail = exc.response.text[:1000] if exc.response is not None else str(exc)
+            except Exception:
+                detail = str(exc)
+            st.error(f"Tavily live search failed (HTTP {status}). Check that TAVILY_API_KEY is correct and that your Tavily account has available credits.")
+            if detail:
+                st.caption(f"Tavily error detail: {detail}")
+        except requests.RequestException as exc:
+            st.error("Could not reach Tavily live search. Check the connection and try again.")
+            st.caption(f"Network error: {type(exc).__name__}")
         except Exception as exc:
             st.error("The request could not be completed. Check the app logs for details.")
             st.caption(f"Error type: {type(exc).__name__}. Sensitive details are hidden.")
