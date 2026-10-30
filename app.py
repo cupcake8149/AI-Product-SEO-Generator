@@ -208,16 +208,36 @@ Remember: a search result snippet alone may not establish that a claim is true. 
             st.stop()
 
         try:
+            research_fallback = False
             with st.spinner(
                 "Researching the product, checking available web sources, and generating your SEO package..."
             ):
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        temperature=0.4,
-                        tools=[types.Tool(google_search=types.GoogleSearch())],
-                    ),
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            temperature=0.4,
+                            tools=[types.Tool(google_search=types.GoogleSearch())],
+                        ),
+                    )
+                except APIError as grounded_exc:
+                    # If the Search-grounded request is quota-blocked, make one
+                    # plain generation attempt so the basic SEO draft can still work.
+                    if getattr(grounded_exc, "code", None) != 429:
+                        raise
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=contents,
+                        config=types.GenerateContentConfig(temperature=0.4),
+                    )
+                    research_fallback = True
+
+            if research_fallback:
+                st.warning(
+                    "Google Search grounding was quota-blocked, so this report was generated "
+                    "without live web research. Competitor prices and customer reviews are "
+                    "not verified in this run; do not treat them as sourced facts."
                 )
 
             response_text = response.text or ""
@@ -267,7 +287,9 @@ Remember: a search result snippet alone may not establish that a claim is true. 
 
         except APIError as exc:
             error_code = getattr(exc, "code", "unknown")
-            error_detail = str(getattr(exc, "message", "") or "").strip()
+            # Include the full SDK error text: the short message alone can omit
+            # structured quota details useful for diagnosing HTTP 429 responses.
+            error_detail = str(exc).strip() or str(getattr(exc, "message", "") or "").strip()
 
             if error_code == 404:
                 st.error(
@@ -287,7 +309,7 @@ Remember: a search result snippet alone may not establish that a claim is true. 
                 )
 
             if error_detail:
-                st.caption(f"Gemini's error detail: {error_detail[:500]}")
+                st.caption(f"Gemini's error detail: {error_detail[:1200]}")
             st.caption("For technical details, open Manage app → Logs in Streamlit Cloud.")
         except Exception as exc:
             st.error("The request could not be completed. Check the app logs for details.")
