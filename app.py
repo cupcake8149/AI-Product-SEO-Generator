@@ -226,9 +226,24 @@ Remember: a search result snippet alone may not establish that a claim is true. 
                     # plain generation attempt so the basic SEO draft can still work.
                     if getattr(grounded_exc, "code", None) != 429:
                         raise
+                    # Explicitly override the research sections for the no-search fallback.
+                    # Without this instruction, the model may invent competitor prices or
+                    # imply that official pages were checked even though Search was unavailable.
+                    fallback_rules = """
+IMPORTANT: LIVE WEB RESEARCH IS UNAVAILABLE IN THIS RUN.
+Do not claim or imply that you searched the web, checked official sites, or verified any source.
+Do not provide competitor price estimates, ratings, availability claims, review quotes, or source URLs
+from memory. In section 7, state that no customer reviews could be verified in this run. In section 9,
+state that competitor comparison is unavailable without live research and ask the user to verify
+current alternatives and prices independently. In section 10, state that no external web sources were
+consulted. You may still analyze visible image details and write general SEO copy, but label uncertain
+product specifications as unverified. These instructions override any earlier request to research
+competitors, prices, reviews, or sources.
+"""
+                    fallback_contents = [contents[0], fallback_rules, *contents[1:]]
                     response = client.models.generate_content(
                         model=model_name,
-                        contents=contents,
+                        contents=fallback_contents,
                         config=types.GenerateContentConfig(temperature=0.4),
                     )
                     research_fallback = True
